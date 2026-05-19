@@ -133,6 +133,13 @@
         .toggle-container { display: flex; background: #f0f0f0; border-radius: 6px; padding: 4px; margin-top: 10px; }
         .toggle-btn { flex: 1; border: none; background: transparent; padding: 8px; cursor: pointer; font-weight: 600; color: #777; border-radius: 4px; font-size: 0.85rem; }
         .toggle-btn.active { background: #fff; color: #2980b9; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .toggle-btn.flash.active { color: #d35400; }
+        .flash-legend {
+            background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+            color: #856404; padding: 10px 12px; border-radius: 6px;
+            font-size: 0.85rem; font-weight: 600; margin-top: 10px;
+            text-align: center; border: 1px dashed #f0c040;
+        }
 
         /* Peso Total */
         .total-weight-display {
@@ -171,6 +178,7 @@
             animation: pulse 2s infinite;
             letter-spacing: 0.5px;
         }
+        .badge-flash { background: linear-gradient(135deg, #FF6B35, #F7931E); }
         @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
 
         /* --- ESTILOS DEL LOGO --- */
@@ -369,20 +377,37 @@
             <div class="toggle-container">
                 <button id="btn-suc" class="toggle-btn active" onclick="cambiarTipo('sucursal')">Sucursal</button>
                 <button id="btn-dom" class="toggle-btn" onclick="cambiarTipo('domicilio')">Domicilio</button>
+                <button id="btn-flash" class="toggle-btn flash" onclick="cambiarTipo('flash')">⚡ Flash</button>
             </div>
 
-            <label>Provincia</label>
-            <select id="provincia" disabled onchange="resetSelection(); calcular();"><option>Cargando...</option></select>
+            <div id="flashLegend" class="flash-legend" style="display:none;">
+                ⚡ 24hs a domicilio — solo CABA y AMBA
+            </div>
+
+            <div id="provinciaWrapper">
+                <label>Provincia</label>
+                <select id="provincia" disabled onchange="resetSelection(); calcular();"><option>Cargando...</option></select>
+            </div>
+
+            <div id="localidadWrapper" style="display:none;">
+                <label>Localidad</label>
+                <select id="localidadFlash" onchange="resetSelection(); calcular();">
+                    <option value="">Cargando localidades...</option>
+                </select>
+            </div>
 
             <div class="form-grid">
-                <div>
-                    <label>Cant. Bultos</label>
-                    <input type="number" id="cantBultos" value="1" min="1" oninput="actualizarPesoTotal()">
-                </div>
-                <div>
-                    <label>Peso (kg) c/u</label>
-                    <input type="number" id="pesoBulto" placeholder="0.5" step="0.1" oninput="actualizarPesoTotal()">
-                </div>
+                <div><label>Cant. Bultos</label><input type="number" id="cantBultos" value="1" min="1" oninput="rebuildBultosUI(); actualizarPesoTotal()"></div>
+                <div><label>Peso (kg) c/u</label><input type="number" id="pesoBulto" placeholder="0.5" step="0.1" oninput="actualizarPesoTotal()"></div>
+            </div>
+            <div style="margin-top:8px; text-align:right;">
+                <a href="#" id="togglePesosDistintos" onclick="togglePesosDistintos(event)" style="font-size:0.8rem; color:#2980b9; text-decoration:none;">
+                    ⚖️ ¿Pesos distintos por bulto?
+                </a>
+            </div>
+            <div id="pesosIndividualesWrap" style="display:none; margin-top:10px; padding:10px; background:#f8f9fa; border-radius:6px; border:1px dashed #ccc;">
+                <div style="font-size:0.8rem; font-weight:600; color:#555; margin-bottom:8px;">Peso de cada bulto:</div>
+                <div id="pesosIndividuales" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;"></div>
             </div>
 
             <div class="total-weight-display">
@@ -431,6 +456,13 @@
     // VERIFICA QUE ESTE LINK TERMINE EN &output=csv
     const BASE_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSm0Q6LN6JIWXLXyX6OJx6YKfdL1PZ1ZXbXYJ8k6TLeKuon1VSiE5mFppvbK3v4-kX5SSOPteA7dzq6/pub?gid=291391766&single=true&output=csv";
     const SHEET_URL = BASE_URL + "&t=" + new Date().getTime();
+
+    // --- CONFIGURACIÓN MOBAPP FLASH ---
+    const FLASH_CP_BASE     = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR10pelt-jk2dKh38-ar_pgGsXo2fADUjHOMkBK7jt3uV8Y-zQJSRGcaZSk3S_kL6GP33IAw6Mjd3LA/pub?gid=1928763953&single=true&output=csv";
+    const FLASH_TARIFA_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR10pelt-jk2dKh38-ar_pgGsXo2fADUjHOMkBK7jt3uV8Y-zQJSRGcaZSk3S_kL6GP33IAw6Mjd3LA/pub?gid=1451646784&single=true&output=csv";
+    const FLASH_CP_URL     = FLASH_CP_BASE     + "&t=" + new Date().getTime();
+    const FLASH_TARIFA_URL = FLASH_TARIFA_BASE + "&t=" + new Date().getTime();
+    const LOGO_FLASH = "https://mobappexpress.com/wp-content/uploads/2024/05/footer.png";
     
     // --- CONFIGURACIÓN DE LOGOS ---
     const LOGO_ANDREANI = "https://mobappexpress.com/wp-content/uploads/2022/07/imagen_2022-07-22_161500736.png";
@@ -439,13 +471,17 @@
     // ------------------------------------
 
     let db = [];
+    let flashLocalidades = new Map(); // localidad → { zona, cps:[] }
+    let flashTarifas = []; // [{titulo, zona, min, max, precio}]
+    let pesosDistintos = false;
     let tipoServicio = 'sucursal';
     let rawCSV = ""; 
     let selectedOptions = []; 
     let availableOptions = [];  
 
     function getLogoUrl(titulo) {
-        const t = titulo.toUpperCase();
+        const t = (titulo || "").toUpperCase();
+        if (t.includes("FLASH")) return LOGO_FLASH;
         if (t.includes("ANDREANI")) return LOGO_ANDREANI;
         if (t.includes("OCA")) return LOGO_OCA;
         if (t.includes("CORREO")) return LOGO_CORREO;
@@ -459,18 +495,94 @@
 
     function cambiarTipo(tipo) {
         tipoServicio = tipo;
-        document.getElementById('btn-suc').className = tipo === 'sucursal' ? 'toggle-btn active' : 'toggle-btn';
-        document.getElementById('btn-dom').className = tipo === 'domicilio' ? 'toggle-btn active' : 'toggle-btn';
-        resetSelection(); 
-        if(db.length > 0 && document.getElementById('provincia').value) calcular();
+        document.getElementById('btn-suc').className   = tipo === 'sucursal'  ? 'toggle-btn active' : 'toggle-btn';
+        document.getElementById('btn-dom').className   = tipo === 'domicilio' ? 'toggle-btn active' : 'toggle-btn';
+        document.getElementById('btn-flash').className = tipo === 'flash'     ? 'toggle-btn flash active' : 'toggle-btn flash';
+
+        const isFlash = (tipo === 'flash');
+        document.getElementById('flashLegend').style.display      = isFlash ? 'block' : 'none';
+        document.getElementById('provinciaWrapper').style.display = isFlash ? 'none'  : 'block';
+        document.getElementById('localidadWrapper').style.display = isFlash ? 'block' : 'none';
+
+        resetSelection();
+
+        if (isFlash) {
+            if (flashLocalidades.size > 0) calcular();
+        } else {
+            if (db.length > 0 && document.getElementById('provincia').value) calcular();
+            else document.getElementById('results').innerHTML = '<p style="grid-column:1/-1; text-align:center; color:#999; margin-top:20px;">Selecciona una provincia.</p>';
+        }
     }
 
     function actualizarPesoTotal() {
-        const cant = parseFloat(document.getElementById('cantBultos').value) || 0;
+        const pesos = getPesosBultos();
+        const total = pesos.reduce((a, b) => a + b, 0);
+        document.getElementById('pesoTotalDisplay').innerText = total.toFixed(2);
+        return total;
+    }
+
+    function togglePesosDistintos(e) {
+        if (e) e.preventDefault();
+        pesosDistintos = !pesosDistintos;
+        const wrap = document.getElementById('pesosIndividualesWrap');
+        const link = document.getElementById('togglePesosDistintos');
+        const inputUnif = document.getElementById('pesoBulto');
+        if (pesosDistintos) {
+            wrap.style.display = 'block';
+            link.innerHTML = '↩️ Usar peso uniforme';
+            inputUnif.disabled = true;
+            inputUnif.style.opacity = 0.5;
+            rebuildBultosUI();
+        } else {
+            wrap.style.display = 'none';
+            link.innerHTML = '⚖️ ¿Pesos distintos por bulto?';
+            inputUnif.disabled = false;
+            inputUnif.style.opacity = 1;
+        }
+        actualizarPesoTotal();
+    }
+
+    function rebuildBultosUI() {
+        if (!pesosDistintos) return;
+        const cant = parseInt(document.getElementById('cantBultos').value) || 0;
+        const cont = document.getElementById('pesosIndividuales');
+        const pesoUnif = parseFloat(document.getElementById('pesoBulto').value) || 0;
+        const prev = [...cont.querySelectorAll('input')].map(i => parseFloat(i.value) || 0);
+        cont.innerHTML = '';
+        for (let i = 0; i < cant; i++) {
+            const val = prev[i] || pesoUnif || '';
+            cont.innerHTML += `
+                <div>
+                    <label style="font-size:0.75rem; margin-top:0;">Bulto ${i + 1} (kg)</label>
+                    <input type="number" class="peso-ind" data-idx="${i}" step="0.1" value="${val}" oninput="actualizarPesoTotal()">
+                </div>`;
+        }
+    }
+
+    function getPesosBultos() {
+        const cant = parseInt(document.getElementById('cantBultos').value) || 0;
+        if (pesosDistintos) {
+            const inputs = document.querySelectorAll('#pesosIndividuales .peso-ind');
+            return [...inputs].map(i => parseFloat(i.value) || 0);
+        }
         const peso = parseFloat(document.getElementById('pesoBulto').value) || 0;
-        const total = (cant * peso).toFixed(2);
-        document.getElementById('pesoTotalDisplay').innerText = total;
-        return parseFloat(total);
+        return Array(cant).fill(peso);
+    }
+
+    function parseCSVLine(line, sep) {
+        const out = [];
+        let cur = "", inQ = false;
+        for (let i = 0; i < line.length; i++) {
+            const c = line[i];
+            if (c === '"') {
+                if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+                else inQ = !inQ;
+            } else if (c === sep && !inQ) {
+                out.push(cur); cur = "";
+            } else { cur += c; }
+        }
+        out.push(cur);
+        return out.map(s => s.trim());
     }
 
     function resetSelection() {
@@ -528,6 +640,57 @@
 
             select.disabled = false;
             document.getElementById('btnCalc').disabled = false;
+
+            // 2) Carga MOBAPP FLASH (CP + Tarifas)
+            try {
+                const [rCp, rTar] = await Promise.all([fetch(FLASH_CP_URL), fetch(FLASH_TARIFA_URL)]);
+                if (rCp.ok && rTar.ok) {
+                    const csvCp  = (await rCp.text()).replace(/^\uFEFF/, '');
+                    const csvTar = (await rTar.text()).replace(/^\uFEFF/, '');
+
+                    // Hoja CP: CP, ZONA, LOCALIDAD
+                    const linesCp = csvCp.split('\n').filter(l => l.trim());
+                    for (let i = 1; i < linesCp.length; i++) {
+                        const c = parseCSVLine(linesCp[i], ',');
+                        if (c.length < 3) continue;
+                        const cp        = (c[0] || '').replace(/\D/g, '').padStart(4, '0');
+                        const zona      = (c[1] || '').trim();
+                        const localidad = (c[2] || '').trim();
+                        if (!localidad || !zona) continue;
+                        if (!flashLocalidades.has(localidad)) {
+                            flashLocalidades.set(localidad, { zona, cps: [] });
+                        }
+                        flashLocalidades.get(localidad).cps.push(cp);
+                    }
+
+                    // Hoja Tarifa: TITULO, (vacío), ZONA, MIN, MAX, PRECIO
+                    const linesTar = csvTar.split('\n').filter(l => l.trim());
+                    for (let i = 1; i < linesTar.length; i++) {
+                        const c = parseCSVLine(linesTar[i], ',');
+                        if (c.length < 6) continue;
+                        const titulo = (c[0] || '').trim();
+                        const zona   = (c[2] || '').trim();
+                        const min    = parseFloat(c[3]);
+                        const max    = parseFloat(c[4]);
+                        const precio = parseFloat(c[5]);
+                        if (titulo && zona && !isNaN(min) && !isNaN(max) && !isNaN(precio)) {
+                            flashTarifas.push({ titulo, zona, min, max, precio });
+                        }
+                    }
+
+                    const selLoc = document.getElementById('localidadFlash');
+                    selLoc.innerHTML = '<option value="">Selecciona Localidad</option>';
+                    [...flashLocalidades.keys()].sort((a, b) => a.localeCompare(b, 'es')).forEach(loc => {
+                        const opt = document.createElement('option');
+                        opt.value = loc;
+                        opt.textContent = `${loc} (${flashLocalidades.get(loc).zona})`;
+                        selLoc.appendChild(opt);
+                    });
+                    console.log(`MOBAPP FLASH: ${flashLocalidades.size} localidades, ${flashTarifas.length} tarifas`);
+                }
+            } catch (e) {
+                console.warn("No se pudo cargar MOBAPP FLASH:", e);
+            }
             
             // Ocultar loading
             const loading = document.getElementById('loading');
@@ -542,11 +705,119 @@
         }
     });
 
+    function renderCard(r, container, isFlash) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        const isSelected = selectedOptions.some(opt => opt.titulo === r.titulo && opt.precio === r.precio);
+        if (isSelected) card.classList.add('selected');
+        card.onclick = isFlash ? function() {} : function() { toggleOption(r, card); };
+
+        const logoUrl = getLogoUrl(r.titulo);
+        let badgeHTML = "";
+        if (isFlash) {
+            badgeHTML = `<div class="badge-mas-elegido badge-flash">⚡ 24HS - CABA Y AMBA</div>`;
+        } else if (r.titulo.toUpperCase().includes("ANDREANI")) {
+            badgeHTML = `<div class="badge-mas-elegido">⭐ MÁS ELEGIDO</div>`;
+        }
+
+        const subtitle = isFlash ? 'ENTREGA EXPRESS 24HS' : 'ENVÍO ESTÁNDAR';
+        const meta = isFlash
+            ? `Zona ${r._zona} · ${r._cantBultosReal} bulto(s)<br>${r._unidades} tarifa(s) aplicada(s)`
+            : `Rango: ${r.min} - ${r.max}kg`;
+
+        let visualContent = "";
+        if (logoUrl) {
+            visualContent = `
+                ${badgeHTML}
+                <div class="logo-box">
+                    <img src="${logoUrl}" class="card-logo-img" alt="${r.titulo}">
+                </div>
+                <div class="card-title">${r.titulo}</div>
+                <div class="card-name">${subtitle}</div>
+            `;
+        } else {
+            visualContent = `
+                ${badgeHTML}
+                <div class="card-title">${r.titulo}</div>
+                <div class="card-name">${subtitle}</div>
+            `;
+        }
+
+        card.innerHTML = `
+            <div class="card-checkbox"></div>
+            ${visualContent}
+            <div class="card-price">$${r.precio.toLocaleString('es-AR')}</div>
+            <div class="card-meta">${meta}</div>
+        `;
+        container.appendChild(card);
+    }
+
     function calcular() {
         const prov = document.getElementById('provincia').value;
         const pesoTotal = actualizarPesoTotal();
         const container = document.getElementById('results');
         container.innerHTML = '';
+
+        // --- MODO FLASH ---
+        if (tipoServicio === 'flash') {
+            const localidad = document.getElementById('localidadFlash').value;
+            const pesos     = getPesosBultos();
+            const pesoTotalFlash = pesos.reduce((a, b) => a + b, 0);
+
+            if (!localidad || pesos.length === 0 || pesoTotalFlash <= 0) {
+                container.innerHTML = '<p style="text-align:center; grid-column:1/-1; padding:20px;">Selecciona localidad, peso y cantidad de bultos.</p>';
+                updatePreview();
+                return;
+            }
+            const info = flashLocalidades.get(localidad);
+            if (!info) {
+                container.innerHTML = '<p style="text-align:center; grid-column:1/-1; color:#e67e22; padding:20px;">Localidad no disponible para MOBAPP Flash.</p>';
+                updatePreview();
+                return;
+            }
+
+            const LIMITE = 25;
+            let precioFinal = 0;
+            let unidadesTotales = 0;
+            let detalleBultos = [];
+            let titulo = 'MOBAPP FLASH';
+
+            for (let i = 0; i < pesos.length; i++) {
+                const p = pesos[i];
+                if (p <= 0) {
+                    container.innerHTML = `<p style="text-align:center; grid-column:1/-1; color:#e67e22; padding:20px;">El bulto ${i + 1} no tiene peso definido.</p>`;
+                    updatePreview();
+                    return;
+                }
+                const unidades = Math.ceil(p / LIMITE);
+                const pesoEfectivo = Math.min(p, LIMITE);
+                const tarifa = flashTarifas.find(t =>
+                    t.zona === info.zona && pesoEfectivo > t.min && pesoEfectivo <= t.max
+                );
+                if (!tarifa) {
+                    container.innerHTML = `<p style="text-align:center; grid-column:1/-1; color:#e67e22; padding:20px;">No hay tarifa para ${pesoEfectivo}kg en zona ${info.zona}.</p>`;
+                    updatePreview();
+                    return;
+                }
+                titulo = tarifa.titulo || titulo;
+                const subtotal = tarifa.precio * unidades;
+                precioFinal += subtotal;
+                unidadesTotales += unidades;
+                detalleBultos.push({ nro: i + 1, peso: p, unidades, precioUnit: tarifa.precio, subtotal });
+            }
+
+            const r = {
+                titulo, provincia: 'Buenos Aires', codigo: 'FLASH-' + info.zona,
+                min: 0, max: LIMITE * unidadesTotales, precio: precioFinal,
+                _flash: true, _localidad: localidad, _zona: info.zona,
+                _detalle: detalleBultos, _unidades: unidadesTotales, _cantBultosReal: pesos.length
+            };
+            renderCard(r, container, true);
+            selectedOptions = [r];
+            container.querySelector('.card').classList.add('selected');
+            updatePreview();
+            return;
+        }
         
         if (!prov || pesoTotal <= 0) {
             container.innerHTML = '<p style="text-align:center; grid-column:1/-1; padding:20px;">Faltan datos de envío.</p>';
@@ -595,48 +866,7 @@
             return pA - pB;
         });
 
-        resultadosFinales.forEach((r) => {
-            const card = document.createElement('div');
-            card.className = 'card';
-            const isSelected = selectedOptions.some(opt => opt.titulo === r.titulo && opt.precio === r.precio);
-            if(isSelected) card.classList.add('selected');
-
-            // Usamos una función externa para evitar problemas de 'this' en loops
-            card.onclick = function() { toggleOption(r, card); };
-
-            const logoUrl = getLogoUrl(r.titulo);
-            let visualContent = "";
-
-            let badgeHTML = "";
-            if (r.titulo.toUpperCase().includes("ANDREANI")) {
-                badgeHTML = `<div class="badge-mas-elegido">⭐ MÁS ELEGIDO</div>`;
-            }
-
-            if (logoUrl) {
-                visualContent = `
-                    ${badgeHTML}
-                    <div class="logo-box">
-                        <img src="${logoUrl}" class="card-logo-img" alt="${r.titulo}">
-                    </div>
-                    <div class="card-title">${r.titulo}</div>
-                    <div class="card-name">ENVÍO ESTÁNDAR</div>
-                `;
-            } else {
-                visualContent = `
-                    ${badgeHTML}
-                    <div class="card-title">${r.titulo}</div>
-                    <div class="card-name">ENVÍO ESTÁNDAR</div>
-                `;
-            }
-
-            card.innerHTML = `
-                <div class="card-checkbox"></div>
-                ${visualContent}
-                <div class="card-price">$${r.precio.toLocaleString('es-AR')}</div>
-                <div class="card-meta">Rango: ${r.min} - ${r.max}kg</div>
-            `;
-            container.appendChild(card);
-        });
+        resultadosFinales.forEach((r) => renderCard(r, container, false));
         
         // Limpiar selecciones obsoletas
         const currentTitulos = new Set(resultadosFinales.map(r => r.titulo));
@@ -662,6 +892,8 @@
     function updatePreview() {
         const includeClient = document.getElementById('includeClientToggle').checked;
         const prov = document.getElementById('provincia').value;
+        const localidadFlash = document.getElementById('localidadFlash').value;
+        const zonaFlash = localidadFlash && flashLocalidades.has(localidadFlash) ? flashLocalidades.get(localidadFlash).zona : "";
         const peso = document.getElementById('pesoTotalDisplay').innerText;
         const bultos = document.getElementById('cantBultos').value;
         
@@ -699,8 +931,13 @@
         }
 
         texto += `📦 *DATOS DE ENVÍO:*\n`;
-        if(prov) {
-            texto += `📍 *Destino:* ${prov}\n`;
+        if ((tipoServicio === 'flash' && localidadFlash) || (tipoServicio !== 'flash' && prov)) {
+            if (tipoServicio === 'flash') {
+                texto += `📍 *Destino:* ${localidadFlash} — Zona ${zonaFlash}\n`;
+                texto += `⚡ *Servicio:* MOBAPP FLASH (24hs - CABA y AMBA)\n`;
+            } else {
+                texto += `📍 *Destino:* ${prov}\n`;
+            }
             texto += `📦 *Bultos:* ${bultos} | ⚖️ *Peso:* ${peso}kg\n\n`;
             texto += `💰 *OPCIONES DISPONIBLES:*\n`;
             texto += `--------------------------------\n`;
@@ -708,7 +945,15 @@
             if (selectedOptions.length > 0) {
                 selectedOptions.forEach((opt, idx) => {
                     texto += `${idx + 1}. *${opt.titulo}*\n`;
-                    texto += `   Precio: $${opt.precio.toLocaleString('es-AR')}\n\n`;
+                    if (opt._flash && opt._detalle) {
+                        opt._detalle.forEach(d => {
+                            const dobleNota = d.unidades > 1 ? ` (>25kg → ${d.unidades} tarifas)` : '';
+                            texto += `   • Bulto ${d.nro}: ${d.peso}kg → $${d.subtotal.toLocaleString('es-AR')}${dobleNota}\n`;
+                        });
+                        texto += `   *TOTAL: $${opt.precio.toLocaleString('es-AR')}*\n\n`;
+                    } else {
+                        texto += `   Precio: $${opt.precio.toLocaleString('es-AR')}\n\n`;
+                    }
                 });
             } else {
                 texto += `_Selecciona opciones arriba para ver precios_\n`;
