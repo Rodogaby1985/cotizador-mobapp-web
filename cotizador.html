@@ -381,7 +381,7 @@
             </div>
 
             <div id="flashLegend" class="flash-legend" style="display:none;">
-                ⚡ 24hs a domicilio — solo CABA y AMBA
+                ⚡ 24 hs a domicilio — solo CABA y AMBA
             </div>
 
             <div id="provinciaWrapper">
@@ -462,6 +462,8 @@
     const FLASH_TARIFA_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR10pelt-jk2dKh38-ar_pgGsXo2fADUjHOMkBK7jt3uV8Y-zQJSRGcaZSk3S_kL6GP33IAw6Mjd3LA/pub?gid=1451646784&single=true&output=csv";
     const FLASH_CP_URL     = FLASH_CP_BASE     + "&t=" + new Date().getTime();
     const FLASH_TARIFA_URL = FLASH_TARIFA_BASE + "&t=" + new Date().getTime();
+    const FLASH_POSTAL_CODE_LENGTH = 4;
+    const FLASH_WEIGHT_LIMIT = 25;
     const LOGO_FLASH = "https://mobappexpress.com/wp-content/uploads/2024/05/footer.png";
     
     // --- CONFIGURACIÓN DE LOGOS ---
@@ -471,7 +473,7 @@
     // ------------------------------------
 
     let db = [];
-    let flashLocalidades = new Map(); // localidad → { zona, cps:[] }
+    let flashLocalidades = new Map(); // localidad → { zona, cps:[cp_4_digitos] }
     let flashTarifas = []; // [{titulo, zona, min, max, precio}]
     let pesosDistintos = false;
     let tipoServicio = 'sucursal';
@@ -653,7 +655,7 @@
                     for (let i = 1; i < linesCp.length; i++) {
                         const c = parseCSVLine(linesCp[i], ',');
                         if (c.length < 3) continue;
-                        const cp        = (c[0] || '').replace(/\D/g, '').padStart(4, '0');
+                        const cp        = (c[0] || '').replace(/\D/g, '').padStart(FLASH_POSTAL_CODE_LENGTH, '0');
                         const zona      = (c[1] || '').trim();
                         const localidad = (c[2] || '').trim();
                         if (!localidad || !zona) continue;
@@ -710,12 +712,12 @@
         card.className = 'card';
         const isSelected = selectedOptions.some(opt => opt.titulo === r.titulo && opt.precio === r.precio);
         if (isSelected) card.classList.add('selected');
-        card.onclick = isFlash ? function() {} : function() { toggleOption(r, card); };
+        if (!isFlash) card.onclick = function() { toggleOption(r, card); };
 
         const logoUrl = getLogoUrl(r.titulo);
         let badgeHTML = "";
         if (isFlash) {
-            badgeHTML = `<div class="badge-mas-elegido badge-flash">⚡ 24HS - CABA Y AMBA</div>`;
+            badgeHTML = `<div class="badge-mas-elegido badge-flash">⚡ 24 HS - CABA Y AMBA</div>`;
         } else if (r.titulo.toUpperCase().includes("ANDREANI")) {
             badgeHTML = `<div class="badge-mas-elegido">⭐ MÁS ELEGIDO</div>`;
         }
@@ -776,7 +778,7 @@
                 return;
             }
 
-            const LIMITE = 25;
+            const LIMITE = FLASH_WEIGHT_LIMIT;
             let precioFinal = 0;
             let unidadesTotales = 0;
             let detalleBultos = [];
@@ -789,7 +791,7 @@
                     updatePreview();
                     return;
                 }
-                const unidades = Math.ceil(p / LIMITE);
+                const requiredTariffUnits = Math.ceil(p / LIMITE);
                 const pesoEfectivo = Math.min(p, LIMITE);
                 const tarifa = flashTarifas.find(t =>
                     t.zona === info.zona && pesoEfectivo > t.min && pesoEfectivo <= t.max
@@ -800,10 +802,10 @@
                     return;
                 }
                 titulo = tarifa.titulo || titulo;
-                const subtotal = tarifa.precio * unidades;
+                const subtotal = tarifa.precio * requiredTariffUnits;
                 precioFinal += subtotal;
-                unidadesTotales += unidades;
-                detalleBultos.push({ nro: i + 1, peso: p, unidades, precioUnit: tarifa.precio, subtotal });
+                unidadesTotales += requiredTariffUnits;
+                detalleBultos.push({ nro: i + 1, peso: p, unidades: requiredTariffUnits, precioUnit: tarifa.precio, subtotal });
             }
 
             const r = {
@@ -934,7 +936,7 @@
         if ((tipoServicio === 'flash' && localidadFlash) || (tipoServicio !== 'flash' && prov)) {
             if (tipoServicio === 'flash') {
                 texto += `📍 *Destino:* ${localidadFlash} — Zona ${zonaFlash}\n`;
-                texto += `⚡ *Servicio:* MOBAPP FLASH (24hs - CABA y AMBA)\n`;
+                texto += `⚡ *Servicio:* MOBAPP FLASH (24 hs - CABA y AMBA)\n`;
             } else {
                 texto += `📍 *Destino:* ${prov}\n`;
             }
@@ -947,8 +949,8 @@
                     texto += `${idx + 1}. *${opt.titulo}*\n`;
                     if (opt._flash && opt._detalle) {
                         opt._detalle.forEach(d => {
-                            const dobleNota = d.unidades > 1 ? ` (>25kg → ${d.unidades} tarifas)` : '';
-                            texto += `   • Bulto ${d.nro}: ${d.peso}kg → $${d.subtotal.toLocaleString('es-AR')}${dobleNota}\n`;
+                            const notaMultiplesTarifas = d.unidades > 1 ? ` (>${FLASH_WEIGHT_LIMIT}kg → ${d.unidades} tarifas)` : '';
+                            texto += `   • Bulto ${d.nro}: ${d.peso}kg → $${d.subtotal.toLocaleString('es-AR')}${notaMultiplesTarifas}\n`;
                         });
                         texto += `   *TOTAL: $${opt.precio.toLocaleString('es-AR')}*\n\n`;
                     } else {
